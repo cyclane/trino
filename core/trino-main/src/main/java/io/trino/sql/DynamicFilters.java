@@ -304,6 +304,12 @@ public final class DynamicFilters
                 }
                 span = floatingPoint.getOrderedValues().getSpan();
             }
+            else if (!domain.getType().isOrderable()) {
+                // Equatable-only types (e.g. JSON, MAP) have no ranges and getRanges() would throw
+                // UnsupportedOperationException. A non-equality comparison cannot narrow such a
+                // value set, so skip the dynamic filter for this descriptor.
+                return Domain.all(domain.getType());
+            }
             else {
                 span = domain.getValues().getRanges().getSpan();
             }
