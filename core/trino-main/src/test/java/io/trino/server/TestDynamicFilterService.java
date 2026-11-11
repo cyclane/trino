@@ -23,6 +23,7 @@ import io.trino.cost.StatsAndCosts;
 import io.trino.execution.DynamicFilterConfig;
 import io.trino.execution.StageId;
 import io.trino.execution.TaskId;
+import io.trino.json.Json;
 import io.trino.operator.RetryPolicy;
 import io.trino.server.DynamicFilterService.DynamicFilterDomainStats;
 import io.trino.server.DynamicFilterService.DynamicFiltersStats;
@@ -94,6 +95,7 @@ import static io.trino.sql.planner.plan.ExchangeNode.Type.REPARTITION;
 import static io.trino.sql.planner.plan.ExchangeNode.Type.REPLICATE;
 import static io.trino.sql.planner.plan.JoinType.INNER;
 import static io.trino.testing.TestingHandles.TEST_TABLE_HANDLE;
+import static io.trino.type.JsonType.JSON;
 import static io.trino.type.Reals.toReal;
 import static io.trino.util.DynamicFiltersTestUtil.getSimplifiedDomainString;
 import static java.util.stream.Collectors.joining;
@@ -1077,5 +1079,37 @@ public class TestDynamicFilterService
                 ImmutableList.of(),
                 ImmutableMap.of(),
                 Optional.empty());
+    }
+
+    @Test
+    public void testDynamicFilterOnJsonType()
+    {
+        // a dynamic filter collected for a JSON join key is a discrete (equatable-only) value
+        // set; translating the summary must not fail with UnsupportedOperationException
+        DynamicFilterService dynamicFilterService = createDynamicFilterService();
+        DynamicFilterId filterId = new DynamicFilterId("df_json");
+        SymbolAllocator symbolAllocator = emptySymbolAllocator();
+        Symbol symbol = symbolAllocator.newSymbol("DF_SYMBOL_JSON", JSON);
+        QueryId queryId = new QueryId("query");
+        StageId stageId = new StageId(queryId, 1);
+
+        dynamicFilterService.registerQuery(queryId, session, ImmutableSet.of(filterId), ImmutableSet.of(filterId), ImmutableSet.of());
+        dynamicFilterService.stageCannotScheduleMoreTasks(stageId, 0, 1);
+
+        DynamicFilter dynamicFilter = dynamicFilterService.createDynamicFilter(
+                queryId,
+                ImmutableList.of(new DynamicFilters.Descriptor(filterId, symbol.toSymbolReference())),
+                ImmutableMap.of(symbol, new TestingColumnHandle("probeColumnJson")));
+
+        assertThat(dynamicFilter.getCurrentPredicate().isAll()).isTrue();
+
+        Json jsonValue = Json.unchecked(utf8Slice("1"));
+        Domain jsonDomain = Domain.create(ValueSet.copyOf(JSON, ImmutableList.of(jsonValue)), false);
+        dynamicFilterService.addTaskDynamicFilters(
+                new TaskId(stageId, 0, 0),
+                ImmutableMap.of(filterId, jsonDomain));
+
+        assertThat(dynamicFilter.getCurrentPredicate()).isEqualTo(TupleDomain.withColumnDomains(ImmutableMap.of(
+                new TestingColumnHandle("probeColumnJson"), jsonDomain)));
     }
 }
