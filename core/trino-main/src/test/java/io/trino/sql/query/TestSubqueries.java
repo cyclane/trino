@@ -1759,4 +1759,60 @@ public class TestSubqueries
                 "SELECT (SELECT 'a' AS x, 1)"))
                 .matches("SELECT (SELECT CAST(ROW('a', 1) AS row(x varchar(1), integer)))");
     }
+
+    @Test
+    public void testUncorrelatedSubqueryInOuterJoinOnClause()
+    {
+        // An uncorrelated IN / quantified-comparison subquery in the ON clause of an outer join
+        // is planned on a single join input. When its operand resolves on one input only, the
+        // subquery must be planned on that input, even if the surrounding expression also
+        // references the other input (e.g. inside an OR or CASE).
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES (true, 1)) t0(c0, c1) LEFT JOIN (VALUES true) t1(c0) ON t0.c1 IN (VALUES 5) OR t1.c0"))
+                .matches("VALUES BIGINT '1'");
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES (true, 1)) t0(c0, c1) LEFT JOIN (VALUES true) t1(c0) ON (t0.c1 >= ANY (VALUES 5)) OR t1.c0"))
+                .matches("VALUES BIGINT '1'");
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES (true, 1)) t0(c0, c1) LEFT JOIN (VALUES true) t1(c0) " +
+                        "ON CASE (t0.c0 AND t1.c0) WHEN (t0.c1 >= ANY (VALUES 5)) THEN true ELSE false END"))
+                .matches("VALUES BIGINT '1'");
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES 1) t0(c0) LEFT JOIN (VALUES 1) t1(c0) ON t0.c0 = t1.c0 AND t0.c0 IN (VALUES 5)"))
+                .matches("VALUES BIGINT '1'");
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES 1) t0(c0) RIGHT JOIN (VALUES 1) t1(c0) ON t1.c0 <> ANY (VALUES 5) OR t0.c0 = 1"))
+                .matches("VALUES BIGINT '1'");
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES 1) t0(c0) FULL JOIN (VALUES 1) t1(c0) ON (t1.c0 = ANY (VALUES 1)) AND t0.c0 = 2"))
+                .matches("VALUES BIGINT '2'");
+
+        // One-sided subqueries joined with AND are fine, and inner joins keep working
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES 1) t0(c0) JOIN (VALUES 1) t1(c0) ON (t0.c0 + t1.c0) IN (VALUES 5)"))
+                .matches("VALUES BIGINT '0'");
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES 1) t0(c0) LEFT JOIN (VALUES 1) t1(c0) ON (t0.c0 + t1.c0) <> 5"))
+                .matches("VALUES BIGINT '1'");
+
+        // When the subquery operand references columns from both join inputs there is no valid
+        // single-sided plan; this must be a user-facing error, not an internal planner error
+        // ("Invalid node. Expression dependencies ... not in source plan output ...").
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES 1) t0(c0) LEFT JOIN (VALUES 1) t1(c0) ON (t0.c0 + t1.c0) IN (VALUES 5)"))
+                .failure()
+                .hasMessageMatching(".*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES 1) t0(c0) RIGHT JOIN (VALUES 1) t1(c0) ON (t0.c0 + t1.c0) <> ANY (VALUES 5)"))
+                .failure()
+                .hasMessageMatching(".*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES 1) t0(c0) FULL JOIN (VALUES 1) t1(c0) ON (t0.c0 + t1.c0) <> ANY (VALUES 5)"))
+                .failure()
+                .hasMessageMatching(".*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
+        assertThat(assertions.query(
+                "SELECT count(*) FROM (VALUES 1) t0(c0) LEFT JOIN (VALUES 1) t1(c0) ON t0.c0 = t1.c0 AND (t0.c0 + t1.c0) IN (VALUES 5)"))
+                .failure()
+                .hasMessageMatching(".*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
+    }
 }
