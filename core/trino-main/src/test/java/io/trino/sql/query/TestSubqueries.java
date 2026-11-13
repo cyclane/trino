@@ -1801,18 +1801,18 @@ public class TestSubqueries
         assertThat(assertions.query(
                 "SELECT count(*) FROM (VALUES 1) t0(c0) LEFT JOIN (VALUES 1) t1(c0) ON (t0.c0 + t1.c0) IN (VALUES 5)"))
                 .failure()
-                .hasMessageMatching(".*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
+                .hasMessageMatching("(?s).*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
         assertThat(assertions.query(
                 "SELECT count(*) FROM (VALUES 1) t0(c0) RIGHT JOIN (VALUES 1) t1(c0) ON (t0.c0 + t1.c0) <> ANY (VALUES 5)"))
                 .failure()
-                .hasMessageMatching(".*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
+                .hasMessageMatching("(?s).*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
         assertThat(assertions.query(
                 "SELECT count(*) FROM (VALUES 1) t0(c0) FULL JOIN (VALUES 1) t1(c0) ON (t0.c0 + t1.c0) <> ANY (VALUES 5)"))
                 .failure()
-                .hasMessageMatching(".*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
+                .hasMessageMatching("(?s).*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
         assertThat(assertions.query(
                 "SELECT count(*) FROM (VALUES 1) t0(c0) LEFT JOIN (VALUES 1) t1(c0) ON t0.c0 = t1.c0 AND (t0.c0 + t1.c0) IN (VALUES 5)"))
                 .failure()
-                .hasMessageMatching(".*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
+                .hasMessageMatching("(?s).*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
     }
 }

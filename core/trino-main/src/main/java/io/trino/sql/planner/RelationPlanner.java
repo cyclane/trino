@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ListMultimap;
+import com.google.common.graph.Traverser;
 import io.trino.Session;
 import io.trino.jsonpath.ir.IrJsonPath;
 import io.trino.metadata.ResolvedFunction;
@@ -1060,6 +1061,7 @@ class RelationPlanner
         if (type != INNER) {
             for (io.trino.sql.tree.Expression complexExpression : complexJoinExpressions) {
                 Set<QualifiedName> dependencies = NamesExtractor.extractNamesNoSubqueries(complexExpression, analysis.getColumnReferences());
+                Set<QualifiedName> subqueryOperandDependencies = extractSubqueryOperandDependencies(complexExpression, subqueries);
 
                 // This is for handling uncorreled subqueries. Correlated subqueries are not currently supported and are dealt with
                 // during analysis.
@@ -1067,8 +1069,26 @@ class RelationPlanner
                 // E.g.,
                 //  t JOIN u ON t.x = (...) get's planned on the t side
                 //  t JOIN u ON t.x = (...) get's planned on the u side
-                //  t JOIN u ON t.x + u.x = (...) get's planned on an arbitrary side
-                if (dependencies.stream().allMatch(left::canResolve)) {
+                // The operand of an IN / quantified-comparison subquery is evaluated on the side the subquery is
+                // planned on, so pick the side based on the operand's dependencies rather than the whole expression's:
+                //  t JOIN u ON t.x IN (...) OR u.y = (...) is planned on the t side
+                if (!subqueryOperandDependencies.isEmpty()) {
+                    if (subqueryOperandDependencies.stream().allMatch(left::canResolve)) {
+                        leftPlanBuilder = subqueryPlanner.handleSubqueries(leftPlanBuilder, complexExpression, subqueries);
+                    }
+                    else if (subqueryOperandDependencies.stream().allMatch(right::canResolve)) {
+                        rightPlanBuilder = subqueryPlanner.handleSubqueries(rightPlanBuilder, complexExpression, subqueries);
+                    }
+                    else {
+                        // The operand needs columns from both join inputs, so there is no single side the
+                        // ApplyNode can be planned on. Fail with a user-facing error instead of building
+                        // an invalid plan.
+                        throw new TrinoException(
+                                NOT_SUPPORTED,
+                                "Subquery in the ON clause of an outer join cannot reference columns from both join inputs: " + complexExpression);
+                    }
+                }
+                else if (dependencies.stream().allMatch(left::canResolve)) {
                     leftPlanBuilder = subqueryPlanner.handleSubqueries(leftPlanBuilder, complexExpression, subqueries);
                 }
                 else {
@@ -1119,6 +1139,27 @@ class RelationPlanner
         }
 
         return new RelationPlan(root, scope, outputSymbols, outerContext);
+    }
+
+    /**
+     * Dependencies of the operands of the relational subquery predicates (IN / quantified comparison /
+     * extended-CASE fragments) contained in the given expression. The operand of such a predicate is
+     * evaluated on the single join input the subquery is planned on.
+     */
+    private Set<QualifiedName> extractSubqueryOperandDependencies(io.trino.sql.tree.Expression expression, Analysis.SubqueryAnalysis subqueries)
+    {
+        List<Node> nodes = ImmutableList.copyOf(Traverser.forTree((Node node) -> node.getChildren()).depthFirstPreOrder(expression));
+        ImmutableSet.Builder<QualifiedName> dependencies = ImmutableSet.builder();
+        for (Analysis.OperandAndPredicate subqueryPredicate : ImmutableList.<Analysis.OperandAndPredicate>builder()
+                .addAll(subqueries.getInPredicates())
+                .addAll(subqueries.getQuantifiedComparisons())
+                .addAll(subqueries.getMatchPredicates())
+                .build()) {
+            if (nodes.stream().anyMatch(node -> node == subqueryPredicate.predicate())) {
+                dependencies.addAll(NamesExtractor.extractNamesNoSubqueries(subqueryPredicate.operand(), analysis.getColumnReferences()));
+            }
+        }
+        return dependencies.build();
     }
 
     private Expression translateComparison(ComparisonPredicate.Operator operator, Symbol left, Symbol right)

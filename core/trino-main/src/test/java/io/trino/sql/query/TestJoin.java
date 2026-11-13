@@ -306,12 +306,10 @@ public class TestJoin
         assertThat(assertions.query("SELECT * FROM (VALUES 1, 2, NULL) t(x) JOIN (VALUES 1, 3, NULL) u(x) ON t.x + u.x > ALL (VALUES 2)"))
                 .matches("VALUES (1, 3), (2, 1), (2, 3)");
 
-        // TODO: this should fail during analysis, but currently fails during planning
-        //   StatementAnalyzer.visitJoin needs to be updated to check whether the join criteria is an InPredicate or QualifiedComparison
-        //   with mixed references to both sides of the join. For that, the Expression needs to be analyzed against a hybrid scope made of both branches
-        //   of the join, instead of using the output scope of the Join node. This, in turn requires adding support for multiple scopes in ExpressionAnalyzer
+        // A subquery whose operand references both sides of an outer join has no valid single-sided
+        // plan, so it is rejected with a user-facing error instead of an internal planner error
         assertThat(assertions.query("SELECT * FROM (VALUES 1, 2, NULL) t(x) RIGHT JOIN (VALUES 1, 3, NULL) u(x) ON t.x + u.x > ALL (VALUES 1)"))
-                .nonTrinoExceptionFailure().hasMessageMatching("Invalid node. Expression dependencies .* not in source plan output .*");
+                .failure().hasMessageMatching("(?s).*Subquery in the ON clause of an outer join cannot reference columns from both join inputs.*");
     }
 
     @Test
